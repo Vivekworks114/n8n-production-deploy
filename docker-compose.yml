@@ -100,7 +100,8 @@ services:
       TZ: "Asia/Singapore"
       DIUN_PROVIDERS_DOCKER: "true"
       DIUN_WATCH_WORKERS: "20"
-      DIUN_NOTIF_STDOUT: "true"
+      DIUN_NOTIF_LOG_LEVEL: "info"
+      DIUN_WATCH_SCHEDULE: "@every 1h"
     networks:
       - traefik-network
 
