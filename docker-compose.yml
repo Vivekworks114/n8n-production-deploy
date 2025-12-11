@@ -96,10 +96,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./diun/data:/data
-      - ./diun/data/diun.yml:/diun.yml:ro
     environment:
       TZ: "Asia/Singapore"
-      DIUN_CONFIG: "/diun.yml"
+      CONFIG: "/data/diun.yml"
     networks:
       - traefik-network
 
