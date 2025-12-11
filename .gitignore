@@ -1,0 +1,28 @@
+# Environment variables (contains secrets)
+.env
+
+# Docker volumes
+data/
+postgres/
+
+# Traefik certificates (contains sensitive data)
+traefik/acme.json
+
+# Backup files (may contain sensitive data)
+backups/*.sql
+backups/*.sql.gz
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
