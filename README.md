@@ -426,9 +426,44 @@ If you see errors like `EACCES: permission denied, open '/home/node/.n8n/config'
    docker compose ps postgres
    ```
 
-3. **Test connection**:
+3. **Database "n8n_user" does not exist**:
+   
+   If you see errors like `FATAL: database "n8n_user" does not exist`, the database needs to be created:
+   
    ```bash
-   docker compose exec postgres psql -U n8n_user -d n8n -c "SELECT 1;"
+   # Connect to postgres as the postgres superuser
+   docker compose exec postgres psql -U postgres
+   ```
+   
+   Then in the psql prompt:
+   ```sql
+   -- Check what databases exist
+   \l
+   
+   -- Check your .env file to see what POSTGRES_DB and POSTGRES_USER are set to
+   -- Then create the database and user if they don't exist
+   CREATE DATABASE n8n;
+   CREATE USER n8n_user WITH PASSWORD 'your_password';
+   GRANT ALL PRIVILEGES ON DATABASE n8n TO n8n_user;
+   \q
+   ```
+   
+   **Or recreate the database from scratch** (⚠️ **WARNING: This will delete all data**):
+   ```bash
+   # Stop all services
+   docker compose down
+   
+   # Remove the postgres data directory
+   sudo rm -rf ./postgres
+   
+   # Start services again (database will be created automatically)
+   docker compose up -d
+   ```
+
+4. **Test connection**:
+   ```bash
+   # Replace with your actual database name and user from .env
+   docker compose exec postgres psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c "SELECT 1;"
    ```
 
 ### Certificate Issues
