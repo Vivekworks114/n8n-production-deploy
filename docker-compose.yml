@@ -1,6 +1,5 @@
-version: '3.8'
-
 services:
+
   # PostgreSQL Database
   postgres:
     image: postgres:16
@@ -29,60 +28,49 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      # Database Configuration
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_PORT: 5432
       DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
       DB_POSTGRESDB_USER: ${POSTGRES_USER}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
-      
-      # Application Configuration
+
       N8N_HOST: ${N8N_HOST}
       N8N_PROTOCOL: https
       N8N_PORT: 5678
       WEBHOOK_URL: ${WEBHOOK_URL}
-      
-      # Security Settings
+
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
-      N8N_USER_MANAGEMENT_DISABLED: ${N8N_USER_MANAGEMENT_DISABLED:-false}
-      N8N_BASIC_AUTH_ACTIVE: ${N8N_BASIC_AUTH_ACTIVE:-false}
-      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:-}
-      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD:-}
-      
-      # Performance & Limits
+
       EXECUTIONS_DATA_PRUNE: ${EXECUTIONS_DATA_PRUNE:-true}
       EXECUTIONS_DATA_MAX_AGE: ${EXECUTIONS_DATA_MAX_AGE:-336}
       NODE_ENV: production
-      N8N_LOG_LEVEL: ${N8N_LOG_LEVEL:-info}
-      
-      # Timezone
+
       GENERIC_TIMEZONE: ${TIMEZONE:-UTC}
       TZ: ${TIMEZONE:-UTC}
+
     volumes:
       - ./data:/home/node/.n8n
     networks:
       - n8n-internal
       - traefik-network
+
     labels:
-      # Traefik Configuration
       - "traefik.enable=true"
       - "traefik.http.routers.n8n.rule=Host(`${N8N_HOST}`)"
       - "traefik.http.routers.n8n.entrypoints=websecure"
       - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
       - "traefik.http.routers.n8n.tls=true"
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
-      # Watchtower: Auto-update n8n
-      - "com.centurylinklabs.watchtower.enable=true"
 
-  # Traefik Reverse Proxy
+
+  # Traefik Reverse Proxy + SSL
   traefik:
     image: traefik:v3.1
     container_name: n8n-traefik
     restart: unless-stopped
     command:
       - "--api.dashboard=true"
-      - "--api.insecure=false"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
@@ -90,7 +78,6 @@ services:
       - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/acme.json"
-      - "--certificatesresolvers.letsencrypt.acme.caserver=https://acme-v02.api.letsencrypt.org/directory"
     ports:
       - "80:80"
       - "443:443"
@@ -99,33 +86,27 @@ services:
       - ./traefik/acme.json:/acme.json
     networks:
       - traefik-network
-    labels:
-      # Watchtower: Do NOT auto-update Traefik (manual updates recommended)
-      - "com.centurylinklabs.watchtower.enable=false"
 
-  # Watchtower - Automatic Container Updates
-  watchtower:
-    image: containrrr/watchtower:latest
-    container_name: n8n-watchtower
+
+  # DIUN — Docker Image Update Notifier (REPLACES WATCHTOWER)
+  diun:
+    image: crazymax/diun:latest
+    container_name: diun
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./diun/data:/data
     environment:
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_POLL_INTERVAL=900
-      - WATCHTOWER_INCLUDE_RESTARTING=true
+      TZ: "Asia/Singapore"
+      DIUN_PROVIDERS_DOCKER: "true"
+      DIUN_WATCH_WORKERS: "20"
+      DIUN_NOTIF_STDOUT: "true"
     networks:
       - traefik-network
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
 
 
 networks:
-  # Internal network for n8n and Postgres (not exposed)
   n8n-internal:
     driver: bridge
-    internal: false
-  # External network for Traefik and services it routes to
   traefik-network:
     driver: bridge
-
