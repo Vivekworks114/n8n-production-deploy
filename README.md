@@ -151,7 +151,34 @@ region = us-east-1
 endpoint = s3.wasabisys.com
 ```
 
-### 5. Start the Services
+### 5. Fix Permissions (Important!)
+
+Before starting services, ensure proper permissions for data directories:
+
+```bash
+# Run the permissions fix script
+./scripts/fix-permissions.sh
+```
+
+**Or manually fix permissions:**
+
+```bash
+# Fix n8n data directory (runs as UID 1000)
+sudo chown -R 1000:1000 ./data
+sudo chmod -R 755 ./data
+
+# Fix postgres data directory (runs as UID 999)
+sudo chown -R 999:999 ./postgres
+sudo chmod -R 755 ./postgres
+
+# Fix diun data directory
+sudo chown -R 1000:1000 ./diun/data
+sudo chmod -R 755 ./diun/data
+```
+
+**Note:** If you encounter `EACCES: permission denied` errors, this is a permissions issue. The containers run as specific users (n8n as UID 1000, postgres as UID 999), and the host directories must be owned by these users.
+
+### 6. Start the Services
 
 ```bash
 # Start all services
@@ -164,7 +191,7 @@ docker compose ps
 docker compose logs -f
 ```
 
-### 6. Access n8n
+### 7. Access n8n
 
 Once services are running and DNS has propagated:
 
@@ -325,6 +352,43 @@ docker compose logs -f n8n
 ```
 
 ## 🛠️ Troubleshooting
+
+### Permission Denied Errors (EACCES)
+
+If you see errors like `EACCES: permission denied, open '/home/node/.n8n/config'`:
+
+1. **Run the permissions fix script**:
+   ```bash
+   ./scripts/fix-permissions.sh
+   ```
+
+2. **Or manually fix permissions**:
+   ```bash
+   # Stop services first
+   docker compose down
+   
+   # Fix n8n data directory
+   sudo chown -R 1000:1000 ./data
+   sudo chmod -R 755 ./data
+   
+   # Fix postgres data directory
+   sudo chown -R 999:999 ./postgres
+   sudo chmod -R 755 ./postgres
+   
+   # Restart services
+   docker compose up -d
+   ```
+
+3. **Verify the fix**:
+   ```bash
+   # Check n8n logs - should no longer show permission errors
+   docker compose logs n8n
+   
+   # Check service status
+   docker compose ps
+   ```
+
+**Why this happens:** The n8n container runs as user `node` (UID 1000) and postgres runs as user `postgres` (UID 999). If the host directories are owned by root or another user, the containers cannot write to them.
 
 ### n8n Not Accessible
 
