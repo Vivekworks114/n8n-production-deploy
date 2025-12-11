@@ -85,7 +85,7 @@ Wait for DNS propagation (can take a few minutes to 48 hours).
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/n8n-production-deploy.git
+git clone https://github.com/Vivekworks114/n8n-production-deploy.git
 cd n8n-production-deploy
 ```
 
