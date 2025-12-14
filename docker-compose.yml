@@ -48,6 +48,7 @@ services:
       N8N_PORT: 5678
       WEBHOOK_URL: ${WEBHOOK_URL}
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_TRUST_PROXY: "true"
 
       # Production hardening
       NODE_ENV: production
@@ -77,7 +78,13 @@ services:
       - "traefik.http.routers.n8n.rule=Host(`n8n.devcorebit.com`)"
       - "traefik.http.routers.n8n.entrypoints=websecure"
       - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.n8n.tls=true"
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+      - "traefik.http.services.n8n.loadbalancer.server.scheme=http"
+      - "traefik.http.routers.n8n.middlewares=n8n-secure-headers"
+      - "traefik.http.middlewares.n8n-secure-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
+      - "traefik.http.middlewares.n8n-secure-headers.headers.customrequestheaders.X-Forwarded-Port=443"
+
 
 
   # ============================================
