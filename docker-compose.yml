@@ -74,7 +74,7 @@ services:
 
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=traefik-network"
+      - "traefik.docker.network=n8n-production-deploy_traefik-network"
       - "traefik.http.routers.n8n.rule=Host(`n8n.devcorebit.com`)"
       - "traefik.http.routers.n8n.entrypoints=websecure"
       - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
