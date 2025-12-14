@@ -1,6 +1,8 @@
 services:
 
+  # ============================================
   # PostgreSQL Database
+  # ============================================
   postgres:
     image: postgres:16
     container_name: n8n-postgres
@@ -19,15 +21,20 @@ services:
       timeout: 5s
       retries: 5
 
+
+  # ============================================
   # n8n Workflow Automation
+  # ============================================
   n8n:
-    image: n8nio/n8n:latest
+    image: n8nio/n8n:1.123.5   # 🔒 pin version (recommended)
     container_name: n8n-app
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+
     environment:
+      # Database
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_PORT: 5432
@@ -35,22 +42,31 @@ services:
       DB_POSTGRESDB_USER: ${POSTGRES_USER}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
 
+      # n8n core
       N8N_HOST: ${N8N_HOST}
       N8N_PROTOCOL: https
       N8N_PORT: 5678
       WEBHOOK_URL: ${WEBHOOK_URL}
-
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
 
-      EXECUTIONS_DATA_PRUNE: ${EXECUTIONS_DATA_PRUNE:-true}
-      EXECUTIONS_DATA_MAX_AGE: ${EXECUTIONS_DATA_MAX_AGE:-336}
+      # Production hardening
       NODE_ENV: production
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"
+      N8N_GIT_NODE_DISABLE_BARE_REPOS: "true"
 
+      # Executions cleanup
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "336"
+
+      # Timezone
       GENERIC_TIMEZONE: ${TIMEZONE:-UTC}
       TZ: ${TIMEZONE:-UTC}
 
     volumes:
       - ./data:/home/node/.n8n
+
     networks:
       - n8n-internal
       - traefik-network
@@ -61,16 +77,18 @@ services:
       - "traefik.http.routers.n8n.rule=Host(`n8n.devcorebit.com`)"
       - "traefik.http.routers.n8n.entrypoints=websecure"
       - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.n8n.tls=true"
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
 
 
+  # ============================================
   # Traefik Reverse Proxy + SSL
+  # ============================================
   traefik:
     image: traefik:v3.6
     container_name: n8n-traefik
     restart: unless-stopped
     command:
+      - "--log.level=INFO"
       - "--api.dashboard=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
@@ -89,7 +107,9 @@ services:
       - traefik-network
 
 
-  # DIUN — Docker Image Update Notifier (REPLACES WATCHTOWER)
+  # ============================================
+  # DIUN – Image Update Notifier
+  # ============================================
   diun:
     image: crazymax/diun:latest
     container_name: diun
@@ -106,6 +126,9 @@ services:
       - traefik-network
 
 
+# ============================================
+# Networks
+# ============================================
 networks:
   n8n-internal:
     driver: bridge
