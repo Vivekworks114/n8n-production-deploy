@@ -26,7 +26,7 @@ services:
   # n8n Workflow Automation
   # ============================================
   n8n:
-    image: n8nio/n8n:1.123.5
+    image: n8nio/n8n:2.0.3
     container_name: n8n-app
     restart: unless-stopped
     depends_on:
