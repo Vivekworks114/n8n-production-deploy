@@ -27,6 +27,7 @@ POSTGRES_CONTAINER="n8n-postgres"
 N8N_CONTAINER="n8n-app"
 DB_NAME="n8n"
 DB_USER="n8n_user"
+WASABI_REMOTE="wasabi:n8n-prod/db-backups"
 
 # Colors for output
 RED='\033[0;31m'
@@ -53,6 +54,45 @@ info() {
 }
 
 ###############################################################################
+# Download backups from Wasabi using rclone
+#
+# Arguments:
+#   $1 - Date in YYYY-MM-DD format
+#
+# Returns:
+#   0 on success, 1 on failure
+###############################################################################
+download_backup_from_wasabi() {
+    local target_date="$1"
+    
+    if [ -z "$target_date" ]; then
+        error "Date is required to download from Wasabi" >&2
+        return 1
+    fi
+    
+    # Check if rclone is available
+    if ! command -v rclone &> /dev/null; then
+        error "rclone is not installed or not in PATH" >&2
+        return 1
+    fi
+    
+    # Construct remote path: wasabi:n8n-prod/db-backups/YYYY-MM-DD/
+    local remote_path="${WASABI_REMOTE}/${target_date}/"
+    
+    log "Downloading backups from Wasabi: ${remote_path}" >&2
+    info "This may take a while depending on backup size and network speed..." >&2
+    
+    # Use rclone copy to download files to restore directory
+    if rclone copy "${remote_path}" "${RESTORE_DIR}/" --progress 2>&1; then
+        log "Backup download completed successfully" >&2
+        return 0
+    else
+        error "Failed to download backups from Wasabi" >&2
+        return 1
+    fi
+}
+
+###############################################################################
 # Find the latest backup file
 #
 # Arguments:
@@ -75,6 +115,16 @@ find_backup_file() {
         # Find all matching files and sort by modification time (newest first)
         backup_file=$(find "${RESTORE_DIR}" -maxdepth 1 -type f -name "${pattern}" -print0 2>/dev/null | \
             xargs -0 ls -t 2>/dev/null | head -n1)
+        
+        # If backup not found locally and date is provided, try downloading from Wasabi
+        if [ -z "$backup_file" ] || [ ! -f "$backup_file" ]; then
+            info "Backup not found locally, attempting to download from Wasabi..." >&2
+            if download_backup_from_wasabi "$target_date"; then
+                # Try finding again after download
+                backup_file=$(find "${RESTORE_DIR}" -maxdepth 1 -type f -name "${pattern}" -print0 2>/dev/null | \
+                    xargs -0 ls -t 2>/dev/null | head -n1)
+            fi
+        fi
     else
         # Find latest backup overall
         info "Looking for latest backup in ${RESTORE_DIR}" >&2
