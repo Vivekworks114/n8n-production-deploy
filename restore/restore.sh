@@ -24,7 +24,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESTORE_DIR="${SCRIPT_DIR}"
 POSTGRES_CONTAINER="n8n-postgres"
-N8N_CONTAINER="n8n"
+N8N_CONTAINER="n8n-app"
 DB_NAME="n8n"
 DB_USER="n8n_user"
 
@@ -141,14 +141,30 @@ verify_database_state() {
 ###############################################################################
 stop_n8n_container() {
     if docker ps --format '{{.Names}}' | grep -q "^${N8N_CONTAINER}$"; then
-        log "Stopping n8n container..."
-        docker stop "${N8N_CONTAINER}" || {
-            error "Failed to stop n8n container"
+        log "Stopping n8n container (${N8N_CONTAINER})..."
+        if ! docker stop "${N8N_CONTAINER}" >/dev/null 2>&1; then
+            error "Failed to stop n8n container ${N8N_CONTAINER}"
             exit 1
-        }
-        log "n8n container stopped"
+        fi
+        
+        # Wait for container to fully stop
+        log "Waiting for container to fully stop..."
+        local wait_count=0
+        while docker ps --format '{{.Names}}' | grep -q "^${N8N_CONTAINER}$" && [ $wait_count -lt 10 ]; do
+            sleep 1
+            wait_count=$((wait_count + 1))
+        done
+        
+        if docker ps --format '{{.Names}}' | grep -q "^${N8N_CONTAINER}$"; then
+            warn "Container ${N8N_CONTAINER} is still running after stop attempt"
+        else
+            log "n8n container stopped successfully"
+        fi
+        
+        # Wait a bit more for database connections to close
+        sleep 2
     else
-        log "n8n container is already stopped"
+        log "n8n container (${N8N_CONTAINER}) is already stopped"
     fi
 }
 
@@ -191,15 +207,57 @@ prepare_backup_file() {
 ###############################################################################
 terminate_connections() {
     local db_name="$1"
+    local max_attempts=5
+    local attempt=1
+    
     log "Terminating active connections to database ${db_name}..."
     
-    # Terminate all connections to the database (except our own)
-    docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -c \
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${db_name}' AND pid <> pg_backend_pid();" \
-        >/dev/null 2>&1 || true
+    while [ $attempt -le $max_attempts ]; do
+        # Get list of PIDs to terminate (excluding our own connection)
+        local pids=$(docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -tAc \
+            "SELECT pid FROM pg_stat_activity WHERE datname = '${db_name}' AND pid <> pg_backend_pid();" 2>&1)
+        
+        # Remove empty lines and whitespace
+        pids=$(echo "$pids" | grep -v '^$' | tr -d ' ' | grep -v '^$')
+        
+        if [ -z "$pids" ]; then
+            log "No active connections found"
+            return 0
+        fi
+        
+        info "Attempt $attempt/$max_attempts: Terminating $(echo "$pids" | wc -l | tr -d ' ') connection(s)..."
+        
+        # Terminate each connection
+        for pid in $pids; do
+            if [ -n "$pid" ] && [ "$pid" != "" ]; then
+                docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -c \
+                    "SELECT pg_terminate_backend($pid);" >/dev/null 2>&1 || true
+            fi
+        done
+        
+        # Wait for connections to close
+        sleep 2
+        
+        # Verify connections are gone
+        local remaining=$(docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -tAc \
+            "SELECT COUNT(*) FROM pg_stat_activity WHERE datname = '${db_name}' AND pid <> pg_backend_pid();" 2>&1)
+        remaining=$(echo "$remaining" | tr -d ' ')
+        
+        if [ "$remaining" = "0" ] || [ -z "$remaining" ]; then
+            log "All connections terminated successfully"
+            return 0
+        fi
+        
+        attempt=$((attempt + 1))
+    done
     
-    # Wait a moment for connections to close
-    sleep 1
+    # If we get here, we couldn't terminate all connections
+    warn "Could not terminate all connections after $max_attempts attempts"
+    warn "Remaining connections:"
+    docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -c \
+        "SELECT pid, usename, application_name, state, query FROM pg_stat_activity WHERE datname = '${db_name}' AND pid <> pg_backend_pid();" 2>&1 | sed 's/^/  /'
+    
+    return 1
 }
 
 ###############################################################################
@@ -212,13 +270,30 @@ recreate_database() {
     
     if [ "$db_exists" = "1" ]; then
         log "Database ${DB_NAME} exists, terminating active connections..."
-        terminate_connections "${DB_NAME}"
+        if ! terminate_connections "${DB_NAME}"; then
+            warn "Some connections may still be active, attempting force drop..."
+        fi
         
         log "Dropping database ${DB_NAME}..."
-        if ! docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -c "DROP DATABASE ${DB_NAME};" 2>&1; then
+        local drop_output
+        drop_output=$(docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -c "DROP DATABASE ${DB_NAME};" 2>&1)
+        local drop_exit=$?
+        
+        if [ $drop_exit -ne 0 ]; then
+            # Try with FORCE option (PostgreSQL 13+)
+            warn "Standard DROP failed, trying DROP DATABASE ... WITH (FORCE)..."
+            drop_output=$(docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -c "DROP DATABASE ${DB_NAME} WITH (FORCE);" 2>&1)
+            drop_exit=$?
+        fi
+        
+        if [ $drop_exit -ne 0 ]; then
             error "Failed to drop database ${DB_NAME}"
+            error "PostgreSQL error output:"
+            echo "$drop_output" | sed 's/^/  /' >&2
+            error ""
             error "This usually means there are still active connections."
-            error "Try running: docker exec ${POSTGRES_CONTAINER} psql -U ${DB_USER} -d postgres -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${DB_NAME}' AND pid <> pg_backend_pid();\""
+            error "You can manually terminate connections with:"
+            error "  docker exec ${POSTGRES_CONTAINER} psql -U ${DB_USER} -d postgres -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${DB_NAME}' AND pid <> pg_backend_pid();\""
             exit 1
         fi
         log "Database ${DB_NAME} dropped successfully"
