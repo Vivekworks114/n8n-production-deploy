@@ -67,7 +67,7 @@ find_backup_file() {
     
     if [ -n "$target_date" ]; then
         # Find latest backup for specific date
-        info "Looking for backups on date: ${target_date}"
+        info "Looking for backups on date: ${target_date}" >&2
         
         # Pattern: n8n_backup_YYYY-MM-DD_*.sql or n8n_backup_YYYY-MM-DD_*.sql.gz
         local pattern="n8n_backup_${target_date}_*.sql*"
@@ -77,7 +77,7 @@ find_backup_file() {
             xargs -0 ls -t 2>/dev/null | head -n1)
     else
         # Find latest backup overall
-        info "Looking for latest backup in ${RESTORE_DIR}"
+        info "Looking for latest backup in ${RESTORE_DIR}" >&2
         
         # Find all backup files matching the pattern and sort by modification time
         backup_file=$(find "${RESTORE_DIR}" -maxdepth 1 -type f \( -name "n8n_backup_*.sql" -o -name "n8n_backup_*.sql.gz" \) -print0 2>/dev/null | \
@@ -86,6 +86,11 @@ find_backup_file() {
     
     if [ -z "$backup_file" ] || [ ! -f "$backup_file" ]; then
         return 1
+    fi
+    
+    # Return absolute path
+    if [[ ! "$backup_file" = /* ]]; then
+        backup_file="$(cd "$(dirname "$backup_file")" && pwd)/$(basename "$backup_file")"
     fi
     
     echo "$backup_file"
@@ -181,12 +186,17 @@ prepare_backup_file() {
     local backup_file="$1"
     local sql_file=""
     
+    # Resolve absolute path if relative
+    if [[ ! "$backup_file" = /* ]]; then
+        backup_file="${RESTORE_DIR}/${backup_file}"
+    fi
+    
     if [[ "$backup_file" == *.gz ]]; then
-        log "Backup file is compressed (.sql.gz), extracting..."
+        log "Backup file is compressed (.sql.gz), extracting..." >&2
         sql_file="${backup_file%.gz}"
         
         if gunzip -c "$backup_file" > "$sql_file"; then
-            log "Backup extracted to: ${sql_file}"
+            log "Backup extracted to: ${sql_file}" >&2
             echo "$sql_file"
         else
             error "Failed to extract backup file"
@@ -194,7 +204,7 @@ prepare_backup_file() {
             exit 1
         fi
     else
-        log "Backup file is already uncompressed (.sql)"
+        log "Backup file is already uncompressed (.sql)" >&2
         echo "$backup_file"
     fi
 }
@@ -424,6 +434,15 @@ main() {
     
     # Prepare backup (extract if needed)
     sql_file=$(prepare_backup_file "$backup_file")
+    
+    # Verify SQL file exists and is readable
+    if [ ! -f "$sql_file" ]; then
+        error "SQL file not found: ${sql_file}"
+        error "Backup file was: ${backup_file}"
+        exit 1
+    fi
+    
+    log "Using SQL file: ${sql_file}"
     
     # Drop and recreate database
     recreate_database
