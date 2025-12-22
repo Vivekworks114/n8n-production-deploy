@@ -103,6 +103,40 @@ check_postgres_container() {
 }
 
 ###############################################################################
+# Verify database state (for debugging)
+###############################################################################
+verify_database_state() {
+    log "Verifying database state..."
+    
+    # Check if database exists
+    local db_exists=$(docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -tAc \
+        "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}';" 2>&1)
+    
+    if [ "$db_exists" = "1" ]; then
+        info "Database ${DB_NAME} exists"
+        
+        # Check active connections
+        local connections=$(docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -tAc \
+            "SELECT COUNT(*) FROM pg_stat_activity WHERE datname = '${DB_NAME}';" 2>&1)
+        info "Active connections to ${DB_NAME}: ${connections}"
+        
+        # Show connection details
+        if [ "$connections" != "0" ]; then
+            warn "Active connections found:"
+            docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -c \
+                "SELECT pid, usename, application_name, state, query FROM pg_stat_activity WHERE datname = '${DB_NAME}';" 2>&1 | sed 's/^/  /'
+        fi
+        
+        # Check database size
+        local db_size=$(docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -tAc \
+            "SELECT pg_size_pretty(pg_database_size('${DB_NAME}'));" 2>&1)
+        info "Database size: ${db_size}"
+    else
+        info "Database ${DB_NAME} does not exist"
+    fi
+}
+
+###############################################################################
 # Stop the n8n container
 ###############################################################################
 stop_n8n_container() {
@@ -150,19 +184,61 @@ prepare_backup_file() {
 }
 
 ###############################################################################
+# Terminate active connections to a database
+#
+# Arguments:
+#   $1 - Database name
+###############################################################################
+terminate_connections() {
+    local db_name="$1"
+    log "Terminating active connections to database ${db_name}..."
+    
+    # Terminate all connections to the database (except our own)
+    docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -c \
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${db_name}' AND pid <> pg_backend_pid();" \
+        >/dev/null 2>&1 || true
+    
+    # Wait a moment for connections to close
+    sleep 1
+}
+
+###############################################################################
 # Drop and recreate the database
 ###############################################################################
 recreate_database() {
-    log "Dropping database ${DB_NAME} if it exists..."
-    docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -c "DROP DATABASE IF EXISTS ${DB_NAME};" >/dev/null 2>&1 || true
+    # Check if database exists
+    local db_exists=$(docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -tAc \
+        "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}';" 2>&1)
+    
+    if [ "$db_exists" = "1" ]; then
+        log "Database ${DB_NAME} exists, terminating active connections..."
+        terminate_connections "${DB_NAME}"
+        
+        log "Dropping database ${DB_NAME}..."
+        if ! docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -c "DROP DATABASE ${DB_NAME};" 2>&1; then
+            error "Failed to drop database ${DB_NAME}"
+            error "This usually means there are still active connections."
+            error "Try running: docker exec ${POSTGRES_CONTAINER} psql -U ${DB_USER} -d postgres -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${DB_NAME}' AND pid <> pg_backend_pid();\""
+            exit 1
+        fi
+        log "Database ${DB_NAME} dropped successfully"
+    else
+        log "Database ${DB_NAME} does not exist (will be created)"
+    fi
     
     log "Creating fresh database ${DB_NAME}..."
-    if ! docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -c "CREATE DATABASE ${DB_NAME};" >/dev/null 2>&1; then
+    local create_output
+    create_output=$(docker exec "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d postgres -c "CREATE DATABASE ${DB_NAME};" 2>&1)
+    local create_exit=$?
+    
+    if [ $create_exit -ne 0 ]; then
         error "Failed to create database ${DB_NAME}"
+        error "PostgreSQL error output:"
+        echo "$create_output" | sed 's/^/  /' >&2
         exit 1
     fi
     
-    log "Database ${DB_NAME} recreated successfully"
+    log "Database ${DB_NAME} created successfully"
 }
 
 ###############################################################################
@@ -177,12 +253,18 @@ restore_database() {
     log "Restoring database from backup..."
     log "This may take several minutes depending on database size..."
     
-    if docker exec -i "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d "${DB_NAME}" < "$sql_file" >/dev/null 2>&1; then
-        log "Database restored successfully"
-    else
+    local restore_output
+    restore_output=$(docker exec -i "${POSTGRES_CONTAINER}" psql -U "${DB_USER}" -d "${DB_NAME}" < "$sql_file" 2>&1)
+    local restore_exit=$?
+    
+    if [ $restore_exit -ne 0 ]; then
         error "Failed to restore database"
+        error "PostgreSQL error output:"
+        echo "$restore_output" | sed 's/^/  /' >&2
         exit 1
     fi
+    
+    log "Database restored successfully"
 }
 
 ###############################################################################
@@ -258,6 +340,9 @@ main() {
     
     # Pre-flight checks
     check_postgres_container
+    
+    # Verify current database state (for debugging)
+    verify_database_state
     
     # Restore procedure (strict order)
     stop_n8n_container
