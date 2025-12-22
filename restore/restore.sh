@@ -83,8 +83,30 @@ download_backup_from_wasabi() {
     info "This may take a while depending on backup size and network speed..." >&2
     
     # Use rclone copy to download files to restore directory
-    if rclone copy "${remote_path}" "${RESTORE_DIR}/" --progress 2>&1; then
+    # Redirect all output to stderr to avoid contaminating stdout
+    local rclone_output
+    rclone_output=$(rclone copy "${remote_path}" "${RESTORE_DIR}/" --progress --stats-one-line 2>&1)
+    local rclone_exit=$?
+    
+    # Show rclone output on stderr
+    echo "$rclone_output" >&2
+    
+    if [ $rclone_exit -eq 0 ]; then
         log "Backup download completed successfully" >&2
+        
+        # Wait a moment to ensure files are fully written to disk
+        sleep 2
+        
+        # Verify files were actually downloaded
+        local pattern="n8n_backup_${target_date}_*.sql*"
+        local downloaded_count=$(find "${RESTORE_DIR}" -maxdepth 1 -type f -name "${pattern}" 2>/dev/null | wc -l)
+        
+        if [ "$downloaded_count" -eq 0 ]; then
+            error "No backup files found after download. Check if files exist in Wasabi: ${remote_path}" >&2
+            return 1
+        fi
+        
+        info "Downloaded ${downloaded_count} backup file(s)" >&2
         return 0
     else
         error "Failed to download backups from Wasabi" >&2
@@ -120,9 +142,22 @@ find_backup_file() {
         if [ -z "$backup_file" ] || [ ! -f "$backup_file" ]; then
             info "Backup not found locally, attempting to download from Wasabi..." >&2
             if download_backup_from_wasabi "$target_date"; then
+                # Wait a bit more to ensure file system is synced
+                sleep 1
+                
                 # Try finding again after download
                 backup_file=$(find "${RESTORE_DIR}" -maxdepth 1 -type f -name "${pattern}" -print0 2>/dev/null | \
                     xargs -0 ls -t 2>/dev/null | head -n1)
+                
+                # Verify the file exists and is readable
+                if [ -n "$backup_file" ] && [ -f "$backup_file" ]; then
+                    info "Found downloaded backup: $(basename "${backup_file}")" >&2
+                else
+                    error "Backup file not found after download" >&2
+                    return 1
+                fi
+            else
+                return 1
             fi
         fi
     else
