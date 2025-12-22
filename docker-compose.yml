@@ -83,7 +83,6 @@ services:
       - "traefik.http.services.n8n.loadbalancer.server.scheme=http"
       - "diun.enable=true"
       - "diun.watch_repo=true"
-      - "diun.notify_on=new,update"
 
 
   # ============================================
