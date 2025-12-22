@@ -82,8 +82,6 @@ services:
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
       - "traefik.http.services.n8n.loadbalancer.server.scheme=http"
       - "diun.enable=true"
-      - "diun.watch_repo=true"
-
 
   # ============================================
   # Traefik Reverse Proxy + SSL
